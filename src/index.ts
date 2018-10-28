@@ -29,6 +29,7 @@ class Chat {
   onLoad(): void {
     const msgRef = this.db.collection("slack").orderBy("postedAt", "asc");
 
+    // Get the data inside the firestore collection at time T.
     const retrieveData$ = new Promise((resolve, reject) => {
       msgRef
         .get()
@@ -46,6 +47,7 @@ class Chat {
         });
     });
 
+    // Bind a listener and do sumffin whenever thing happens.
     retrieveData$
       .then(() => {
         this.render();
@@ -76,7 +78,7 @@ class Chat {
               }
             };
 
-            changesEvents[changes.type]();
+            return changesEvents[changes.type]();
           });
         });
       })
