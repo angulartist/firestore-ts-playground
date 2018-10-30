@@ -1,5 +1,6 @@
 import * as firebase from "firebase/app";
 import "firebase/firestore";
+import "firebase/auth";
 import * as Faker from "faker";
 import { ProjectConfig } from "./models/project-config.model";
 import { Message } from "./models/message.model";
@@ -14,22 +15,21 @@ class Chat {
 
   // UI
   msgBox: HTMLDivElement;
-  button: HTMLButtonElement;
+  addItemButton: HTMLButtonElement;
+  loginButton: HTMLButtonElement;
+  logoutButton: HTMLButtonElement;
 
   constructor(config: ProjectConfig) {
     this.app = firebase.initializeApp(config);
     this.db = this.app.firestore();
     this.db.settings({ timestampsInSnapshots: true });
 
+    // REF
     this.msgRef = this.db.collection("slack").orderBy("postedAt", "asc");
-
-    // INIT UI
-    this.msgBox = document.querySelector("#message");
-    this.button = document.querySelector("#send");
-    this.button.addEventListener("click", () => this.addMsg());
   }
 
   onLoad(): void {
+    this._initUI();
     // Get the data inside the firestore collection at time T.
     const retrieveData$ = new Promise((resolve, reject) => {
       this.msgRef
@@ -55,6 +55,25 @@ class Chat {
         });
       })
       .catch(error => console.log("Error happn.", "=>", error));
+
+    // Check if user logged in
+    this.checkAuthState();
+  }
+
+  /**
+   * INIT UI
+   */
+  _initUI() {
+    this.msgBox = document.querySelector("#chat-container");
+    // Add item button
+    this.addItemButton = document.querySelector("#add-item");
+    this.addItemButton.addEventListener("click", () => this.addMsg());
+    // Login button
+    this.loginButton = document.querySelector("#login-button");
+    this.loginButton.addEventListener("click", () => this.login());
+    // Logout button
+    this.logoutButton = document.querySelector("#logout-button");
+    this.logoutButton.addEventListener("click", () => this.logout());
   }
 
   // Initial UI Render
@@ -63,19 +82,12 @@ class Chat {
     const docFragment = document.createDocumentFragment();
 
     this.dataArray.map(doc => {
-      // Message Wrapper
-      const messageWrapper = document.createElement("div");
-      messageWrapper.id = doc.id;
-      // Message Div
-      const messageDiv = document.createElement("div");
-      messageDiv.textContent = doc.msg;
-      messageDiv.addEventListener("click", () => {
-        this.removeMsg(doc);
-      });
-      // Append
-      messageWrapper.appendChild(messageDiv);
-      messageWrapper.querySelector("div").className = "update";
-      docFragment.appendChild(messageWrapper);
+      const msgText = document.createElement("div");
+      msgText.id = doc.id;
+      msgText.textContent = doc.msg;
+      msgText.addEventListener("click", () => this.removeMsg(doc));
+
+      docFragment.appendChild(msgText);
     });
 
     return this.msgBox.appendChild(docFragment);
@@ -87,28 +99,19 @@ class Chat {
     return {
       add: (): DocumentFragment => {
         const docFragment = document.createDocumentFragment();
-        // Message Wrapper
-        const messageWrapper = document.createElement("div");
-        messageWrapper.id = `${doc.id}`;
-        // Message Div
-        const messageDiv = document.createElement("div");
-        messageDiv.textContent = doc.msg;
-        messageDiv.addEventListener("click", () => {
-          this.removeMsg(doc);
-        });
-        // Append
-        messageWrapper.appendChild(messageDiv);
-        messageWrapper.querySelector("div").className = "show";
-        docFragment.appendChild(messageWrapper);
+
+        // Message content
+        const msgText = document.createElement("div");
+        msgText.id = doc.id;
+        msgText.textContent = doc.msg;
+        msgText.addEventListener("click", () => this.removeMsg(doc));
+
+        docFragment.appendChild(msgText);
 
         return this.msgBox.appendChild(docFragment);
       },
       remove: (): void => {
-        const docToRemove = document.getElementById(doc.id);
-        docToRemove.querySelector("div").className = "remove";
-        setTimeout(() => {
-          docToRemove.remove();
-        }, 300);
+        document.getElementById(doc.id).remove();
       }
     }[type]();
   }
@@ -116,37 +119,38 @@ class Chat {
   // DATA Manipulation
 
   updateData(type: string, doc: firebase.firestore.QueryDocumentSnapshot) {
+    const data = doc.data();
+    const { id } = doc;
+    const fireDoc = { id, ...data };
+
     return {
       init: () => {
-        const data = doc.data();
-        const { id } = doc;
-        const document = { id, ...data };
-        return (this.dataArray = [document, ...this.dataArray]);
+        return (this.dataArray = [fireDoc, ...this.dataArray]);
       },
       add: () => {
         if (!this.dataArray.some(el => el.id === doc.id)) {
-          const data = doc.data();
-          const { id } = doc;
-          const fireDoc = { id, ...data };
           this.dataArray = [fireDoc, ...this.dataArray];
           // update the UI
           return this.updateRender("add", fireDoc);
+        } else {
+          console.log("error doc exists", "=>", doc.id);
         }
       },
       remove: () => {
         if (this.dataArray.some(el => el.id === doc.id)) {
-          const data = doc.data();
-          const { id } = doc;
-          const fireDoc = { id, ...data };
           this.dataArray = this.dataArray.filter(el => el.id !== fireDoc.id);
           // update the UI
           return this.updateRender("remove", fireDoc);
+        } else {
+          console.log("error doc not in array", "=>", doc.id);
         }
       }
     }[type]();
   }
 
-  // Firestore CRUD
+  /**
+   * FIRESTORE CRUD
+   */
 
   addMsg(): Promise<firebase.firestore.DocumentReference> {
     let randomName = Faker.random.words();
@@ -164,10 +168,40 @@ class Chat {
     return this.db.doc(`slack/${documentId}`).delete();
   }
 
-  // GETTERS
+  /**
+   * GETTERS
+   */
 
   get timestamp(): firebase.firestore.FieldValue {
     return firebase.firestore.FieldValue.serverTimestamp();
+  }
+
+  /**
+   * AUTH
+   */
+
+  login(): Promise<void> {
+    return this.app
+      .auth()
+      .signInAnonymously()
+      .then(user => console.log(user));
+  }
+
+  logout(): Promise<void> {
+    return this.app.auth().signOut();
+  }
+
+  checkAuthState() {
+    this.app.auth().onAuthStateChanged(user => {
+      if (user) {
+        console.log(user);
+        this.loginButton.style.display = "none";
+        this.logoutButton.style.display = "block";
+      } else {
+        this.loginButton.style.display = "block";
+        this.logoutButton.style.display = "none";
+      }
+    });
   }
 }
 
