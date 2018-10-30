@@ -119,6 +119,7 @@ class Chat {
   // DATA Manipulation
 
   updateData(type: string, doc: firebase.firestore.QueryDocumentSnapshot) {
+    // declare
     const data = doc.data();
     const { id } = doc;
     const fireDoc = { id, ...data };
@@ -132,8 +133,6 @@ class Chat {
           this.dataArray = [fireDoc, ...this.dataArray];
           // update the UI
           return this.updateRender("add", fireDoc);
-        } else {
-          console.log("error doc exists", "=>", doc.id);
         }
       },
       remove: () => {
@@ -141,8 +140,6 @@ class Chat {
           this.dataArray = this.dataArray.filter(el => el.id !== fireDoc.id);
           // update the UI
           return this.updateRender("remove", fireDoc);
-        } else {
-          console.log("error doc not in array", "=>", doc.id);
         }
       }
     }[type]();
