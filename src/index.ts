@@ -1,214 +1,248 @@
-import * as firebase from "firebase/app";
-import "firebase/firestore";
-import "firebase/auth";
-import * as Faker from "faker";
-import { ProjectConfig } from "./models/project-config.model";
-import { Message } from "./models/message.model";
+import * as firebase from 'firebase/app'
+import 'firebase/firestore'
+import 'firebase/auth'
+import { collectionData } from 'rxfire/firestore'
+import { Observable } from 'rxjs'
+import { tap, map } from 'rxjs/operators'
 
-class Chat {
-  app: firebase.app.App;
-  db: firebase.firestore.Firestore;
-  msgRef: firebase.firestore.Query;
+// Models
+import { ProjectConfig } from './models/project-config.model'
+import { IEnigma } from './models/enigma.model'
+import { IWinner } from './models/enigma.model'
+import { IHistory } from './models/history.model'
 
-  // DATA
-  dataArray: any[] = [];
+export class EnigmaInstance {
+	db: firebase.firestore.Firestore
 
-  // UI
-  msgBox: HTMLDivElement;
-  addItemButton: HTMLButtonElement;
-  loginButton: HTMLButtonElement;
-  logoutButton: HTMLButtonElement;
+	// data
+	currentEnigma: IEnigma
+	currentUser: firebase.User
+	userHistory: any[]
 
-  constructor(config: ProjectConfig) {
-    this.app = firebase.initializeApp(config);
-    this.db = this.app.firestore();
-    this.db.settings({ timestampsInSnapshots: true });
+	constructor(private configuration: ProjectConfig) {
+		firebase.initializeApp(this.configuration)
+		this.db = firebase.firestore()
+		this.db.settings({ timestampsInSnapshots: true })
 
-    // REF
-    this.msgRef = this.db.collection("slack").orderBy("postedAt", "asc");
-  }
+		this.initFirebaseAuth()
+	}
 
-  onLoad(): void {
-    this._initUI();
-    // Get the data inside the firestore collection at time T.
-    const retrieveData$ = new Promise((resolve, reject) => {
-      this.msgRef
-        .get()
-        .then(snapshot => {
-          snapshot.docs.map(doc => this.updateData("init", doc));
-          resolve();
-        })
-        .catch(error => reject(error));
-    });
+	signIn() {
+		return firebase
+			.auth()
+			.signInWithPopup(new firebase.auth.GoogleAuthProvider())
+	}
 
-    // Bind a listener and do sumffin whenever thing happens.
-    retrieveData$
-      .then(() => {
-        this.render();
-        this.msgRef.onSnapshot(snapshot => {
-          snapshot.docChanges().map(changes => {
-            return {
-              added: () => this.updateData("add", changes.doc),
-              removed: () => this.updateData("remove", changes.doc)
-            }[changes.type]();
-          });
-        });
-      })
-      .catch(error => console.log("Error happn.", "=>", error));
+	signOut(): Promise<void> {
+		return firebase.auth().signOut()
+	}
 
-    // Check if user logged in
-    this.checkAuthState();
-  }
+	initFirebaseAuth(): void {
+		firebase.auth().onAuthStateChanged(this.onAuthStateChanged.bind(this))
+	}
 
-  /**
-   * INIT UI
-   */
-  _initUI() {
-    this.msgBox = document.querySelector("#chat-container");
-    // Add item button
-    this.addItemButton = document.querySelector("#add-item");
-    this.addItemButton.addEventListener("click", () => this.addMsg());
-    // Login button
-    this.loginButton = document.querySelector("#login-button");
-    this.loginButton.addEventListener("click", () => this.login());
-    // Logout button
-    this.logoutButton = document.querySelector("#logout-button");
-    this.logoutButton.addEventListener("click", () => this.logout());
-  }
+	onAuthStateChanged(user: firebase.User) {
+		if (user) {
+			console.log('welcome back...' + user.displayName)
+			this.currentUser = user
+			this.retrieveEnigma()
+			render._authUI(user)
+		} else {
+			render._authUI(null)
+		}
+	}
 
-  // Initial UI Render
+	retrieveEnigma() {
+		const currentEnigmaRef = this.db
+			.collection('enigma')
+			.where('isOpen', '==', true)
+			.limit(1)
 
-  render(): DocumentFragment {
-    const docFragment = document.createDocumentFragment();
+		collectionData(currentEnigmaRef, 'id').subscribe(items => {
+			// get the first one
+			const { 0: firstNode } = items
 
-    this.dataArray.map(doc => {
-      const msgText = document.createElement("div");
-      msgText.id = doc.id;
-      msgText.textContent = doc.msg;
-      msgText.addEventListener("click", () => this.removeMsg(doc));
+			this.currentEnigma = firstNode
 
-      docFragment.appendChild(msgText);
-    });
+			if (this.currentEnigma) {
+				console.log('found question')
+				this.retrieveHistory()
+			} else {
+				render._buildUI()
+			}
+		})
+	}
 
-    return this.msgBox.appendChild(docFragment);
-  }
+	retrieveHistory() {
+		const { id: enigmaId }: IEnigma = this.currentEnigma
 
-  // DOM Manipulation
+		const userHistoryRef = this.db
+			.collection('enigma_cmd')
+			.where('enigmaId', '==', enigmaId)
 
-  updateRender(type: string, doc: Message) {
-    return {
-      add: (): DocumentFragment => {
-        const docFragment = document.createDocumentFragment();
+		collectionData(userHistoryRef, 'id').subscribe(items => {
+			this.userHistory = [...items]
+			console.log(this.userHistory)
+			render._buildUI()
+		})
+	}
 
-        // Message content
-        const msgText = document.createElement("div");
-        msgText.id = doc.id;
-        msgText.textContent = doc.msg;
-        msgText.addEventListener("click", () => this.removeMsg(doc));
+	sendCommand() {
+		const payload = {
+			enigmaId: this.currentEnigma.id,
+			userId: this.currentUser.uid,
+			userAnswer: 'XD',
+			status: 'Analyze...'
+		}
 
-        docFragment.appendChild(msgText);
-
-        return this.msgBox.appendChild(docFragment);
-      },
-      remove: (): void => {
-        document.getElementById(doc.id).remove();
-      }
-    }[type]();
-  }
-
-  // DATA Manipulation
-
-  updateData(type: string, doc: firebase.firestore.QueryDocumentSnapshot) {
-    // declare
-    const data = doc.data();
-    const { id } = doc;
-    const fireDoc = { id, ...data };
-
-    return {
-      init: () => {
-        return (this.dataArray = [fireDoc, ...this.dataArray]);
-      },
-      add: () => {
-        if (!this.dataArray.some(el => el.id === doc.id)) {
-          this.dataArray = [fireDoc, ...this.dataArray];
-          // update the UI
-          return this.updateRender("add", fireDoc);
-        }
-      },
-      remove: () => {
-        if (this.dataArray.some(el => el.id === doc.id)) {
-          this.dataArray = this.dataArray.filter(el => el.id !== fireDoc.id);
-          // update the UI
-          return this.updateRender("remove", fireDoc);
-        }
-      }
-    }[type]();
-  }
-
-  /**
-   * FIRESTORE CRUD
-   */
-
-  addMsg(): Promise<firebase.firestore.DocumentReference> {
-    let randomName = Faker.random.words();
-    return this.db
-      .collection("slack")
-      .add({ msg: randomName, postedAt: new Date() });
-  }
-
-  editMsg({ id: documentId }: Message): Promise<void> {
-    let randomName = Faker.hacker.phrase;
-    return this.db.doc(`slack/${documentId}`).update({ msg: randomName });
-  }
-
-  removeMsg({ id: documentId }: Message): Promise<void> {
-    return this.db.doc(`slack/${documentId}`).delete();
-  }
-
-  /**
-   * GETTERS
-   */
-
-  get timestamp(): firebase.firestore.FieldValue {
-    return firebase.firestore.FieldValue.serverTimestamp();
-  }
-
-  /**
-   * AUTH
-   */
-
-  login(): Promise<void> {
-    return this.app
-      .auth()
-      .signInAnonymously()
-      .then(user => console.log(user));
-  }
-
-  logout(): Promise<void> {
-    return this.app.auth().signOut();
-  }
-
-  checkAuthState() {
-    this.app.auth().onAuthStateChanged(user => {
-      if (user) {
-        console.log(user);
-        this.loginButton.style.display = "none";
-        this.logoutButton.style.display = "block";
-      } else {
-        this.loginButton.style.display = "block";
-        this.logoutButton.style.display = "none";
-      }
-    });
-  }
+		return this.db.collection('enigma_cmd').add(payload)
+	}
 }
 
-const chatApp = new Chat({
-  apiKey: "AIzaSyAJCNeREdEEE6WLxvFNpNavv6NTXOmdpGk",
-  authDomain: "toto-e2e69.firebaseapp.com",
-  databaseURL: "https://toto-e2e69.firebaseio.com",
-  projectId: "toto-e2e69",
-  storageBucket: "toto-e2e69.appspot.com",
-  messagingSenderId: "666341637840"
-});
+export const enigma = new EnigmaInstance({
+	apiKey: 'AIzaSyAJCNeREdEEE6WLxvFNpNavv6NTXOmdpGk',
+	authDomain: 'toto-e2e69.firebaseapp.com',
+	databaseURL: 'https://toto-e2e69.firebaseio.com',
+	projectId: 'toto-e2e69',
+	storageBucket: 'toto-e2e69.appspot.com',
+	messagingSenderId: '666341637840'
+})
 
-window.addEventListener("load", chatApp.onLoad.bind(chatApp));
+export class RenderInstance {
+	loaderElement: HTMLDivElement
+	questionElement: HTMLDivElement
+	historyElement: HTMLDivElement
+	winnersElement: HTMLDivElement
+	inputElement: HTMLInputElement
+	submitButton: HTMLButtonElement
+	signInButton: HTMLButtonElement
+	signOutButton: HTMLButtonElement
+
+	constructor() {
+		this._queryElements()
+		this._appendEvents()
+	}
+
+	_buildUI() {
+		this._dismissLoader()
+
+		// check if current enigma exist
+		if (enigma.currentEnigma && enigma.userHistory) {
+			if (this._isUserWinner()) {
+				console.log('Winner')
+			}
+			this._showUI()
+			this._buildEnigma(enigma.currentEnigma)
+			this._buildHistory(enigma.userHistory)
+			this._buildWinners(enigma.currentEnigma.winners)
+		} else {
+			this._hideUI()
+		}
+	}
+
+	_isUserWinner(): boolean {
+		return enigma.currentEnigma.winners.some(
+			winner => winner.userName === enigma.currentUser.uid
+		)
+	}
+
+	_hideEnigmaForm() {
+		this.enigmaForm.map(el => (el.style.display = 'none'))
+	}
+
+	_buildEnigma({ question, id, winners }: IEnigma) {
+		this.questionElement.textContent = question
+	}
+
+	_cleanhistory() {
+		while (this.historyElement.lastChild) {
+			this.historyElement.removeChild(this.historyElement.lastChild)
+		}
+	}
+
+	_buildHistory(userHistory: IHistory[]) {
+		this._cleanhistory()
+
+		const fragment = document.createDocumentFragment()
+		userHistory.map(({ userAnswer, status }: IHistory) => {
+			const historyCard = document.createElement('p')
+			historyCard.textContent = userAnswer + ' => ' + status
+			fragment.appendChild(historyCard)
+		})
+		this.historyElement.appendChild(fragment)
+	}
+
+	_cleanWinners() {
+		while (this.winnersElement.lastChild) {
+			this.winnersElement.removeChild(this.winnersElement.lastChild)
+		}
+	}
+
+	_buildWinners(winners: IWinner[]) {
+		this._cleanWinners()
+
+		const fragment = document.createDocumentFragment()
+		winners.map(({ userName, points }: IWinner) => {
+			const winnerCard = document.createElement('p')
+			winnerCard.textContent = userName
+			fragment.appendChild(winnerCard)
+		})
+		this.winnersElement.appendChild(fragment)
+	}
+
+	_dismissLoader() {
+		this.loaderElement.style.display = 'none'
+	}
+
+	_showUI() {
+		this.gameElements.map(el => (el.style.display = 'block'))
+	}
+
+	_hideUI() {
+		this.gameElements.map(el => (el.style.display = 'none'))
+	}
+
+	_authUI(user: firebase.User) {
+		if (user) {
+			this.signInButton.style.display = 'none'
+			this.signOutButton.style.display = 'block'
+		} else {
+			this._hideUI()
+			this.signInButton.style.display = 'block'
+			this.signOutButton.style.display = 'none'
+		}
+	}
+
+	get enigmaForm() {
+		return [this.questionElement, this.inputElement, this.submitButton]
+	}
+
+	get gameElements() {
+		return [
+			this.questionElement,
+			this.inputElement,
+			this.submitButton,
+			this.historyElement,
+			this.winnersElement
+		]
+	}
+
+	_queryElements() {
+		this.loaderElement = document.querySelector('#loader')
+		this.questionElement = document.querySelector('#app_question')
+		this.historyElement = document.querySelector('#app_history')
+		this.winnersElement = document.querySelector('#app_winners')
+		this.inputElement = document.querySelector('#app_input')
+		this.submitButton = document.querySelector('#app_submit')
+		this.signInButton = document.querySelector('#app_login')
+		this.signOutButton = document.querySelector('#app_logout')
+	}
+
+	_appendEvents() {
+		this.signInButton.addEventListener('click', () => enigma.signIn())
+		this.signOutButton.addEventListener('click', () => enigma.signOut())
+		this.submitButton.addEventListener('click', () => enigma.sendCommand())
+	}
+}
+
+export const render = new RenderInstance()
