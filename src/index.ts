@@ -27,7 +27,7 @@ export class EnigmaInstance {
 		this.initFirebaseAuth()
 	}
 
-	signIn() {
+	signIn(): Promise<firebase.auth.UserCredential> {
 		return firebase
 			.auth()
 			.signInWithPopup(new firebase.auth.GoogleAuthProvider())
@@ -41,7 +41,7 @@ export class EnigmaInstance {
 		firebase.auth().onAuthStateChanged(this.onAuthStateChanged.bind(this))
 	}
 
-	onAuthStateChanged(user: firebase.User) {
+	onAuthStateChanged(user: firebase.User): void {
 		if (user) {
 			console.log('welcome back...' + user.displayName)
 			this.currentUser = user
@@ -52,7 +52,7 @@ export class EnigmaInstance {
 		}
 	}
 
-	retrieveEnigma() {
+	retrieveEnigma(): void {
 		const currentEnigmaRef = this.db
 			.collection('enigma')
 			.where('isOpen', '==', true)
@@ -73,7 +73,7 @@ export class EnigmaInstance {
 		})
 	}
 
-	retrieveHistory() {
+	retrieveHistory(): void {
 		const { id: enigmaId }: IEnigma = this.currentEnigma
 
 		const userHistoryRef = this.db
@@ -87,12 +87,14 @@ export class EnigmaInstance {
 		})
 	}
 
-	sendCommand() {
+	sendCommand(): Promise<firebase.firestore.DocumentReference> {
+		const { value: userAnswer } = render.inputElement
+
 		const payload = {
 			enigmaId: this.currentEnigma.id,
 			userId: this.currentUser.uid,
-			userAnswer: 'XD',
-			status: 'Analyze...'
+			userAnswer,
+			status: 'Processing...'
 		}
 
 		return this.db.collection('enigma_cmd').add(payload)
@@ -123,20 +125,17 @@ export class RenderInstance {
 		this._appendEvents()
 	}
 
-	_buildUI() {
+	_buildUI(): void {
 		this._dismissLoader()
 
 		// check if current enigma exist
 		if (enigma.currentEnigma && enigma.userHistory) {
-			if (this._isUserWinner()) {
-				console.log('Winner')
-			}
 			this._showUI()
 			this._buildEnigma(enigma.currentEnigma)
 			this._buildHistory(enigma.userHistory)
 			this._buildWinners(enigma.currentEnigma.winners)
 		} else {
-			this._hideUI()
+			this._clearUI()
 		}
 	}
 
@@ -146,21 +145,17 @@ export class RenderInstance {
 		)
 	}
 
-	_hideEnigmaForm() {
-		this.enigmaForm.map(el => (el.style.display = 'none'))
-	}
-
-	_buildEnigma({ question, id, winners }: IEnigma) {
+	_buildEnigma({ question, id, winners }: IEnigma): void {
 		this.questionElement.textContent = question
 	}
 
-	_cleanhistory() {
+	_cleanhistory(): void {
 		while (this.historyElement.lastChild) {
 			this.historyElement.removeChild(this.historyElement.lastChild)
 		}
 	}
 
-	_buildHistory(userHistory: IHistory[]) {
+	_buildHistory(userHistory: IHistory[]): void {
 		this._cleanhistory()
 
 		const fragment = document.createDocumentFragment()
@@ -172,13 +167,13 @@ export class RenderInstance {
 		this.historyElement.appendChild(fragment)
 	}
 
-	_cleanWinners() {
+	_cleanWinners(): void {
 		while (this.winnersElement.lastChild) {
 			this.winnersElement.removeChild(this.winnersElement.lastChild)
 		}
 	}
 
-	_buildWinners(winners: IWinner[]) {
+	_buildWinners(winners: IWinner[]): void {
 		this._cleanWinners()
 
 		const fragment = document.createDocumentFragment()
@@ -190,34 +185,41 @@ export class RenderInstance {
 		this.winnersElement.appendChild(fragment)
 	}
 
-	_dismissLoader() {
+	_dismissLoader(): void {
 		this.loaderElement.style.display = 'none'
 	}
 
-	_showUI() {
-		this.gameElements.map(el => (el.style.display = 'block'))
-	}
+	_showUI(): void {
+		this._clearUI()
 
-	_hideUI() {
+		if (this._isUserWinner()) {
+			this.winnerUI.map(el => (el.style.display = 'block'))
+			return
+		}
+
 		this.gameElements.map(el => (el.style.display = 'none'))
 	}
 
-	_authUI(user: firebase.User) {
+	_clearUI(): void {
+		this.gameElements.map(el => (el.style.display = 'none'))
+	}
+
+	_authUI(user: firebase.User): void {
 		if (user) {
 			this.signInButton.style.display = 'none'
 			this.signOutButton.style.display = 'block'
 		} else {
-			this._hideUI()
+			this._clearUI()
 			this.signInButton.style.display = 'block'
 			this.signOutButton.style.display = 'none'
 		}
 	}
 
-	get enigmaForm() {
-		return [this.questionElement, this.inputElement, this.submitButton]
+	get winnerUI(): any[] {
+		return [this.questionElement, this.historyElement, this.winnersElement]
 	}
 
-	get gameElements() {
+	get gameElements(): any[] {
 		return [
 			this.questionElement,
 			this.inputElement,
@@ -227,7 +229,7 @@ export class RenderInstance {
 		]
 	}
 
-	_queryElements() {
+	_queryElements(): void {
 		this.loaderElement = document.querySelector('#loader')
 		this.questionElement = document.querySelector('#app_question')
 		this.historyElement = document.querySelector('#app_history')
@@ -238,7 +240,7 @@ export class RenderInstance {
 		this.signOutButton = document.querySelector('#app_logout')
 	}
 
-	_appendEvents() {
+	_appendEvents(): void {
 		this.signInButton.addEventListener('click', () => enigma.signIn())
 		this.signOutButton.addEventListener('click', () => enigma.signOut())
 		this.submitButton.addEventListener('click', () => enigma.sendCommand())
